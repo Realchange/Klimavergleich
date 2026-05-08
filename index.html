@@ -401,6 +401,13 @@
       <div class="overlay-wrapper"><canvas id="chart-overlay"></canvas></div>
     </div>
 
+    <div class="overlay-chart-card">
+      <h3>Langzeit-Trend</h3>
+      <div class="subtitle" id="trend-subtitle">Jahreswerte 1950 bis heute, gleitendes 10-Jahres-Mittel und linearer Trend. Die farbigen Bänder markieren die oben verglichenen Zeiträume — so siehst du, wann die größten Änderungen auftraten.</div>
+      <div class="overlay-wrapper"><canvas id="chart-trend"></canvas></div>
+      <div id="trend-stats" style="margin-top: 16px; font-family: -apple-system, system-ui, sans-serif; font-size: 0.9rem; color: var(--ink-soft); text-align: center;"></div>
+    </div>
+
     <p class="quote">
       „Der Mensch erfährt sich nur, soweit er die Welt erfährt." — Goethe<br>
       <span style="font-size:0.85em; opacity:0.7;">Datenquelle: Open-Meteo / ECMWF ERA5-Reanalyse</span>
@@ -429,8 +436,31 @@ const VARIABLE_META = {
 };
 
 let currentLocation = null;
-let charts = { old: null, new: null, overlay: null };
+let charts = { old: null, new: null, overlay: null, trend: null };
 let suggestionTimer = null;
+const TREND_START_YEAR = 1950;
+const TREND_END_YEAR = 2025;
+
+// ----------------------------------------------
+//  Chart.js Plugin: Periode-Hintergrund
+// ----------------------------------------------
+const periodHighlightPlugin = {
+  id: 'periodHighlight',
+  beforeDatasetsDraw(chart, args, opts) {
+    const periods = opts?.periods || [];
+    if (!periods.length) return;
+    const { ctx, chartArea, scales: { x } } = chart;
+    periods.forEach(p => {
+      const xStart = x.getPixelForValue(p.start);
+      const xEnd = x.getPixelForValue(p.end);
+      ctx.save();
+      ctx.fillStyle = p.color;
+      ctx.fillRect(xStart, chartArea.top, xEnd - xStart, chartArea.bottom - chartArea.top);
+      ctx.restore();
+    });
+  }
+};
+Chart.register(periodHighlightPlugin);
 
 const $ = (id) => document.getElementById(id);
 
@@ -704,6 +734,187 @@ function buildOverlayChart(monthlyOld, monthlyNew, labelOld, labelNew, meta, isP
 }
 
 // ----------------------------------------------
+//  Langzeit-Trend (Jahres-Zeitreihe)
+// ----------------------------------------------
+async function fetchLongTimeSeries(lat, lon, variable, startYear, endYear) {
+  const start = `${startYear}-01-01`;
+  const end = `${endYear}-12-31`;
+  const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${start}&end_date=${end}&daily=${variable}&timezone=auto`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`API-Fehler (Trend): ${res.status}`);
+  return res.json();
+}
+
+function aggregateAnnual(dates, values, aggType) {
+  const yearGroups = {};
+  for (let i = 0; i < dates.length; i++) {
+    const v = values[i];
+    if (v === null || v === undefined || Number.isNaN(v)) continue;
+    const y = parseInt(dates[i].substring(0, 4), 10);
+    if (!yearGroups[y]) yearGroups[y] = [];
+    yearGroups[y].push(v);
+  }
+  const series = Object.entries(yearGroups)
+    .map(([y, arr]) => ({
+      year: parseInt(y, 10),
+      // Für Niederschlag: Jahressumme; sonst Jahresmittel
+      value: aggType === 'sum-monthly-mean'
+        ? arr.reduce((a, b) => a + b, 0)
+        : arr.reduce((a, b) => a + b, 0) / arr.length,
+      count: arr.length
+    }))
+    .filter(d => d.count >= 350)  // unvollständige Jahre ausschließen
+    .sort((a, b) => a.year - b.year);
+  return series;
+}
+
+function movingAverage(annualSeries, window = 10) {
+  const half = Math.floor(window / 2);
+  return annualSeries.map((d, i) => {
+    const start = Math.max(0, i - half);
+    const end = Math.min(annualSeries.length, i + (window - half));
+    const slice = annualSeries.slice(start, end);
+    if (slice.length < Math.ceil(window * 0.6)) return { x: d.year, y: null };
+    return {
+      x: d.year,
+      y: slice.reduce((a, b) => a + b.value, 0) / slice.length
+    };
+  });
+}
+
+function linearFit(annualSeries) {
+  const n = annualSeries.length;
+  if (n < 2) return null;
+  const xs = annualSeries.map(d => d.year);
+  const ys = annualSeries.map(d => d.value);
+  const meanX = xs.reduce((a, b) => a + b, 0) / n;
+  const meanY = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (xs[i] - meanX) * (ys[i] - meanY);
+    den += (xs[i] - meanX) ** 2;
+  }
+  const slope = num / den;
+  const intercept = meanY - slope * meanX;
+  return {
+    slope,
+    intercept,
+    perDecade: slope * 10,
+    line: annualSeries.map(d => ({ x: d.year, y: intercept + slope * d.year }))
+  };
+}
+
+function buildTrendChart(annualSeries, meta, isPrecip, periodOldRange, periodNewRange) {
+  destroyChart('trend');
+  const ctx = $('chart-trend').getContext('2d');
+
+  const ma = movingAverage(annualSeries, 10);
+  const fit = linearFit(annualSeries);
+
+  const annualPoints = annualSeries.map(d => ({ x: d.year, y: d.value }));
+
+  const datasets = [
+    {
+      type: 'line',
+      label: 'Jahreswert',
+      data: annualPoints,
+      borderColor: 'rgba(60, 60, 60, 0.35)',
+      backgroundColor: 'rgba(60, 60, 60, 0.55)',
+      pointRadius: 2.5,
+      pointHoverRadius: 5,
+      borderWidth: 1,
+      tension: 0,
+      showLine: true,
+      order: 3
+    },
+    {
+      type: 'line',
+      label: '10-Jahres-Mittel',
+      data: ma.filter(p => p.y !== null),
+      borderColor: '#1a1a1a',
+      backgroundColor: 'transparent',
+      borderWidth: 3,
+      pointRadius: 0,
+      tension: 0.3,
+      order: 1
+    }
+  ];
+
+  if (fit) {
+    datasets.push({
+      type: 'line',
+      label: 'Linearer Trend',
+      data: fit.line,
+      borderColor: '#c84b3c',
+      borderDash: [6, 5],
+      borderWidth: 2,
+      pointRadius: 0,
+      tension: 0,
+      order: 2
+    });
+  }
+
+  charts.trend = new Chart(ctx, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      parsing: false,
+      plugins: {
+        legend: { position: 'top', labels: { font: { size: 12 }, usePointStyle: true } },
+        tooltip: {
+          callbacks: {
+            title: (items) => `Jahr ${items[0].parsed.x}`,
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y?.toFixed(meta.decimals)} ${meta.unit}`
+          }
+        },
+        periodHighlight: {
+          periods: [
+            { start: periodOldRange[0] - 0.5, end: periodOldRange[1] + 0.5, color: 'rgba(74, 111, 165, 0.18)' },
+            { start: periodNewRange[0] - 0.5, end: periodNewRange[1] + 0.5, color: 'rgba(200, 75, 60, 0.18)' }
+          ]
+        }
+      },
+      scales: {
+        y: {
+          title: { display: true, text: `${isPrecip ? 'Jahressumme' : 'Jahresmittel'} ${meta.label} (${meta.unit})` },
+          grid: { color: '#eeeae0' }
+        },
+        x: {
+          type: 'linear',
+          ticks: { stepSize: 10, callback: v => v },
+          title: { display: true, text: 'Jahr' },
+          grid: { color: '#f4f1e8' }
+        }
+      }
+    }
+  });
+
+  return { fit, ma };
+}
+
+function renderTrendStats(fit, annualSeries, meta, isPrecip) {
+  if (!fit || !annualSeries.length) {
+    $('trend-stats').textContent = '';
+    return;
+  }
+  const first = annualSeries[0];
+  const last = annualSeries[annualSeries.length - 1];
+  const totalChange = fit.slope * (last.year - first.year);
+  const sign = totalChange >= 0 ? '+' : '';
+  const decadeSign = fit.perDecade >= 0 ? '+' : '';
+
+  $('trend-stats').innerHTML = `
+    <strong>Linearer Trend ${first.year}–${last.year}:</strong>
+    ${decadeSign}${fit.perDecade.toFixed(meta.decimals + 1)} ${meta.unit} pro Jahrzehnt
+    &nbsp;·&nbsp;
+    <strong>Gesamtveränderung:</strong> ${sign}${totalChange.toFixed(meta.decimals)} ${meta.unit}
+    über ${last.year - first.year} Jahre
+  `;
+}
+
+// ----------------------------------------------
 //  Summary-Karten
 // ----------------------------------------------
 function renderSummary(annualOld, annualNew, extrasOld, extrasNew, meta, isPrecip, periodLabelOld, periodLabelNew) {
@@ -776,17 +987,21 @@ async function runComparison() {
   $('status').innerHTML = `<div class="loader"></div>Lade Klimadaten für <strong>${currentLocation.name}</strong>…`;
 
   try {
-    const [oldData, newData, extrasOld, extrasNew] = await Promise.all([
+    const [oldData, newData, extrasOld, extrasNew, longData] = await Promise.all([
       fetchHistorical(lat, lon, startOld, endOld, variable),
       fetchHistorical(lat, lon, startNew, endNew, variable),
       fetchExtras(lat, lon, startOld, endOld),
-      fetchExtras(lat, lon, startNew, endNew)
+      fetchExtras(lat, lon, startNew, endNew),
+      fetchLongTimeSeries(lat, lon, variable, TREND_START_YEAR, TREND_END_YEAR)
     ]);
 
     const monthlyOld = aggregateMonthly(oldData.daily.time, oldData.daily[variable], meta.agg);
     const monthlyNew = aggregateMonthly(newData.daily.time, newData.daily[variable], meta.agg);
     const annualOld = computeAnnualStat(monthlyOld, meta.agg);
     const annualNew = computeAnnualStat(monthlyNew, meta.agg);
+
+    // Jahres-Zeitreihe für den Trend-Chart
+    const annualSeries = aggregateAnnual(longData.daily.time, longData.daily[variable], meta.agg);
 
     // Header
     const region = [currentLocation.admin1, currentLocation.country].filter(Boolean).join(', ');
@@ -804,6 +1019,9 @@ async function runComparison() {
     buildSingleChart('chart-old', labelOld, monthlyOld, '#4a6fa5', 'rgba(74, 111, 165, 0.18)', meta, isPrecip);
     buildSingleChart('chart-new', labelNew, monthlyNew, '#c84b3c', 'rgba(200, 75, 60, 0.18)', meta, isPrecip);
     buildOverlayChart(monthlyOld, monthlyNew, labelOld, labelNew, meta, isPrecip);
+
+    const { fit } = buildTrendChart(annualSeries, meta, isPrecip, [startOld, endOld], [startNew, endNew]);
+    renderTrendStats(fit, annualSeries, meta, isPrecip);
 
     renderSummary(annualOld, annualNew, extrasOld, extrasNew, meta, isPrecip, labelOld, labelNew);
 
