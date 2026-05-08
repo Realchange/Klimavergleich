@@ -419,7 +419,16 @@
 <footer>
   Daten: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo Historical Weather API</a> (ERA5-Reanalyse).
   Klimanormale werden aus Tagesdaten über jeweils 10 Jahre gemittelt und als monatliche Werte dargestellt.
+  &nbsp;·&nbsp;
+  <a href="#" id="clear-cache">Cache leeren</a>
 </footer>
+<script>
+  document.getElementById('clear-cache').addEventListener('click', (e) => {
+    e.preventDefault();
+    Object.keys(localStorage).filter(k => k.startsWith('klima-')).forEach(k => localStorage.removeItem(k));
+    alert('Lokaler Cache gelöscht. Beim nächsten Vergleich werden Daten neu geladen.');
+  });
+</script>
 
 <script>
 // ============================================================
@@ -519,15 +528,82 @@ document.addEventListener('click', (e) => {
 });
 
 // ----------------------------------------------
-//  Historical Weather API
+//  Historical Weather API — EIN Call pro Ort, gecacht
 // ----------------------------------------------
-async function fetchHistorical(lat, lon, startYear, endYear, variable) {
-  const start = `${startYear}-01-01`;
-  const end = `${endYear}-12-31`;
-  const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${start}&end_date=${end}&daily=${variable}&timezone=auto`;
+const dataCache = new Map();
+const CACHE_VERSION = 'v2';
+const CACHE_KEY_PREFIX = `klima-${CACHE_VERSION}-`;
+
+async function fetchAllData(lat, lon) {
+  const url = `https://archive-api.open-meteo.com/v1/archive`
+    + `?latitude=${lat}&longitude=${lon}`
+    + `&start_date=${TREND_START_YEAR}-01-01&end_date=${TREND_END_YEAR}-12-31`
+    + `&daily=temperature_2m_mean,temperature_2m_max,temperature_2m_min,precipitation_sum`
+    + `&timezone=auto`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`API-Fehler: ${res.status}`);
+  if (!res.ok) {
+    if (res.status === 429) throw new Error('RATE_LIMIT');
+    throw new Error(`API-Fehler: ${res.status}`);
+  }
   return res.json();
+}
+
+async function getAllDataCached(lat, lon) {
+  const key = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+  // 1) In-Memory-Cache
+  if (dataCache.has(key)) return dataCache.get(key);
+  // 2) localStorage-Cache
+  const lsKey = CACHE_KEY_PREFIX + key;
+  try {
+    const cached = localStorage.getItem(lsKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      dataCache.set(key, parsed);
+      return parsed;
+    }
+  } catch (e) { /* ignore */ }
+  // 3) Frische Daten holen
+  const data = await fetchAllData(lat, lon);
+  dataCache.set(key, data);
+  try {
+    localStorage.setItem(lsKey, JSON.stringify(data));
+  } catch (e) {
+    // localStorage voll — kein Drama, In-Memory reicht
+    console.warn('localStorage voll, überspringe persistenten Cache');
+  }
+  return data;
+}
+
+// Tagesdaten auf einen Jahresbereich beschneiden
+function sliceByYears(daily, startYear, endYear) {
+  const result = { time: [] };
+  const vars = Object.keys(daily).filter(k => k !== 'time');
+  vars.forEach(v => result[v] = []);
+  for (let i = 0; i < daily.time.length; i++) {
+    const y = parseInt(daily.time[i].substring(0, 4), 10);
+    if (y >= startYear && y <= endYear) {
+      result.time.push(daily.time[i]);
+      vars.forEach(v => result[v].push(daily[v][i]));
+    }
+  }
+  return result;
+}
+
+// Extras aus einem bereits gesliceten Zeitraum berechnen
+function computeExtrasFromSlice(slice) {
+  if (!slice.time.length) return null;
+  const startY = parseInt(slice.time[0].substring(0, 4), 10);
+  const endY = parseInt(slice.time[slice.time.length - 1].substring(0, 4), 10);
+  const years = Math.max(1, endY - startY + 1);
+  const tmax = slice.temperature_2m_max || [];
+  const tmin = slice.temperature_2m_min || [];
+  const precip = slice.precipitation_sum || [];
+  return {
+    hotDaysPerYear:    tmax.filter(v => v !== null && v >= 30).length / years,
+    summerDaysPerYear: tmax.filter(v => v !== null && v >= 25).length / years,
+    frostDaysPerYear:  tmin.filter(v => v !== null && v < 0).length / years,
+    annualPrecip:      precip.filter(v => v !== null).reduce((a, b) => a + b, 0) / years
+  };
 }
 
 // ----------------------------------------------
@@ -576,30 +652,6 @@ function computeAnnualStat(values, aggType) {
   return valid.reduce((a, b) => a + b, 0) / valid.length;
 }
 
-// Zusatz-Statistiken aus den Rohdaten
-function countDays(values, predicate) {
-  return values.filter(predicate).length;
-}
-
-async function fetchExtras(lat, lon, startYear, endYear) {
-  const start = `${startYear}-01-01`;
-  const end = `${endYear}-12-31`;
-  const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${start}&end_date=${end}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`API-Fehler: ${res.status}`);
-  const data = await res.json();
-  const years = endYear - startYear + 1;
-  const tmax = data.daily.temperature_2m_max;
-  const tmin = data.daily.temperature_2m_min;
-  const precip = data.daily.precipitation_sum;
-  return {
-    hotDaysPerYear: countDays(tmax, v => v !== null && v >= 30) / years,
-    summerDaysPerYear: countDays(tmax, v => v !== null && v >= 25) / years,
-    frostDaysPerYear: countDays(tmin, v => v !== null && v < 0) / years,
-    annualPrecip: precip.filter(v => v !== null).reduce((a, b) => a + b, 0) / years,
-    annualMeanTmax: tmax.filter(v => v !== null).reduce((a, b) => a + b, 0) / tmax.filter(v => v !== null).length
-  };
-}
 
 // ----------------------------------------------
 //  Charts
@@ -736,15 +788,6 @@ function buildOverlayChart(monthlyOld, monthlyNew, labelOld, labelNew, meta, isP
 // ----------------------------------------------
 //  Langzeit-Trend (Jahres-Zeitreihe)
 // ----------------------------------------------
-async function fetchLongTimeSeries(lat, lon, variable, startYear, endYear) {
-  const start = `${startYear}-01-01`;
-  const end = `${endYear}-12-31`;
-  const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${start}&end_date=${end}&daily=${variable}&timezone=auto`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`API-Fehler (Trend): ${res.status}`);
-  return res.json();
-}
-
 function aggregateAnnual(dates, values, aggType) {
   const yearGroups = {};
   for (let i = 0; i < dates.length; i++) {
@@ -984,24 +1027,27 @@ async function runComparison() {
 
   $('results').classList.add('hidden');
   $('status').classList.remove('hidden');
-  $('status').innerHTML = `<div class="loader"></div>Lade Klimadaten für <strong>${currentLocation.name}</strong>…`;
+  const cacheKey = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const fromCache = dataCache.has(cacheKey) || localStorage.getItem(CACHE_KEY_PREFIX + cacheKey);
+  $('status').innerHTML = `<div class="loader"></div>${fromCache ? 'Berechne Vergleich' : 'Lade Klimadaten'} für <strong>${currentLocation.name}</strong>…`;
 
   try {
-    const [oldData, newData, extrasOld, extrasNew, longData] = await Promise.all([
-      fetchHistorical(lat, lon, startOld, endOld, variable),
-      fetchHistorical(lat, lon, startNew, endNew, variable),
-      fetchExtras(lat, lon, startOld, endOld),
-      fetchExtras(lat, lon, startNew, endNew),
-      fetchLongTimeSeries(lat, lon, variable, TREND_START_YEAR, TREND_END_YEAR)
-    ]);
+    const allData = await getAllDataCached(lat, lon);
+    const daily = allData.daily;
 
-    const monthlyOld = aggregateMonthly(oldData.daily.time, oldData.daily[variable], meta.agg);
-    const monthlyNew = aggregateMonthly(newData.daily.time, newData.daily[variable], meta.agg);
+    const sliceOld = sliceByYears(daily, startOld, endOld);
+    const sliceNew = sliceByYears(daily, startNew, endNew);
+
+    const monthlyOld = aggregateMonthly(sliceOld.time, sliceOld[variable], meta.agg);
+    const monthlyNew = aggregateMonthly(sliceNew.time, sliceNew[variable], meta.agg);
     const annualOld = computeAnnualStat(monthlyOld, meta.agg);
     const annualNew = computeAnnualStat(monthlyNew, meta.agg);
 
+    const extrasOld = computeExtrasFromSlice(sliceOld);
+    const extrasNew = computeExtrasFromSlice(sliceNew);
+
     // Jahres-Zeitreihe für den Trend-Chart
-    const annualSeries = aggregateAnnual(longData.daily.time, longData.daily[variable], meta.agg);
+    const annualSeries = aggregateAnnual(daily.time, daily[variable], meta.agg);
 
     // Header
     const region = [currentLocation.admin1, currentLocation.country].filter(Boolean).join(', ');
@@ -1030,7 +1076,16 @@ async function runComparison() {
 
   } catch (err) {
     console.error(err);
-    $('status').innerHTML = `<p style="color: var(--accent-new);">Fehler beim Laden der Daten: ${err.message}.<br>Bitte erneut versuchen oder anderen Ort/Zeitraum wählen.</p>`;
+    let message;
+    if (err.message === 'RATE_LIMIT') {
+      message = `<strong>Open-Meteo: Anfragelimit erreicht.</strong><br>
+                 Die kostenlose API erlaubt nur eine begrenzte Anzahl Abfragen pro Minute.<br>
+                 Bitte ca. <strong>60 Sekunden warten</strong> und dann erneut versuchen.<br>
+                 <span style="font-size: 0.9em; opacity: 0.8;">Gute Nachricht: Sobald ein Ort einmal geladen ist, wird er lokal gecacht — Variable-Wechsel und Reloads brauchen dann keine API mehr.</span>`;
+    } else {
+      message = `Fehler beim Laden der Daten: ${err.message}.<br>Bitte erneut versuchen oder anderen Ort/Zeitraum wählen.`;
+    }
+    $('status').innerHTML = `<div style="color: var(--accent-new); padding: 24px; max-width: 640px; margin: 0 auto; line-height: 1.6;">${message}</div>`;
   }
 }
 
