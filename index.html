@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Klimavergleich — Wie hat sich das Wetter an deinem Ort verändert?</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f7f5f0;
+    --card: #ffffff;
+    --ink: #1a1a1a;
+    --ink-soft: #555;
+    --line: #d9d4c7;
+    --accent-old: #4a6fa5;
+    --accent-old-soft: rgba(74, 111, 165, 0.18);
+    --accent-new: #c84b3c;
+    --accent-new-soft: rgba(200, 75, 60, 0.18);
+    --warm: #e9b44c;
+    --shadow: 0 1px 3px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.06);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: 'Georgia', 'Iowan Old Style', 'Palatino', serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.55;
+  }
+
+  header {
+    padding: 48px 24px 32px;
+    text-align: center;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #ffffff 0%, var(--bg) 100%);
+  }
+
+  h1 {
+    margin: 0 0 8px;
+    font-size: 2.2rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  .subtitle {
+    color: var(--ink-soft);
+    font-size: 1.05rem;
+    max-width: 640px;
+    margin: 0 auto;
+    font-style: italic;
+  }
+
+  main {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+  }
+
+  .controls {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: var(--shadow);
+    margin-bottom: 32px;
+  }
+
+  .control-grid {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: 16px;
+    align-items: end;
+  }
+
+  @media (max-width: 800px) {
+    .control-grid { grid-template-columns: 1fr; }
+  }
+
+  .field { display: flex; flex-direction: column; gap: 4px; }
+
+  label {
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+    font-family: -apple-system, system-ui, sans-serif;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+
+  input[type="text"], select {
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    font-size: 1rem;
+    font-family: inherit;
+    color: var(--ink);
+    min-width: 180px;
+  }
+
+  input[type="text"]:focus, select:focus {
+    outline: 2px solid var(--accent-old);
+    outline-offset: -1px;
+  }
+
+  button {
+    padding: 10px 20px;
+    background: var(--ink);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 1rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  button:hover:not(:disabled) { background: #333; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .suggestions {
+    position: relative;
+  }
+
+  .suggestion-list {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    max-height: 240px;
+    overflow-y: auto;
+    z-index: 10;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  }
+
+  .suggestion-item {
+    padding: 10px 12px;
+    cursor: pointer;
+    font-size: 0.95rem;
+    border-bottom: 1px solid #f0ede5;
+  }
+
+  .suggestion-item:hover { background: #f7f5f0; }
+  .suggestion-item:last-child { border-bottom: none; }
+
+  .status {
+    text-align: center;
+    padding: 32px;
+    color: var(--ink-soft);
+    font-style: italic;
+  }
+
+  .location-info {
+    text-align: center;
+    margin-bottom: 24px;
+    padding: 16px;
+    background: var(--card);
+    border-radius: 8px;
+    border-left: 4px solid var(--warm);
+  }
+
+  .location-info h2 {
+    margin: 0 0 4px;
+    font-size: 1.4rem;
+  }
+
+  .location-info .coords {
+    color: var(--ink-soft);
+    font-size: 0.9rem;
+    font-family: -apple-system, system-ui, sans-serif;
+  }
+
+  .summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+
+  .summary-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: var(--shadow);
+  }
+
+  .summary-card .label {
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+    font-family: -apple-system, system-ui, sans-serif;
+    margin-bottom: 8px;
+  }
+
+  .summary-card .value {
+    font-size: 2rem;
+    font-weight: 600;
+    line-height: 1.1;
+  }
+
+  .summary-card .value.warmer { color: var(--accent-new); }
+  .summary-card .value.cooler { color: var(--accent-old); }
+  .summary-card .value.neutral { color: var(--ink); }
+
+  .summary-card .detail {
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+    margin-top: 4px;
+    font-family: -apple-system, system-ui, sans-serif;
+  }
+
+  .charts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 32px;
+  }
+
+  @media (max-width: 900px) {
+    .charts { grid-template-columns: 1fr; }
+  }
+
+  .chart-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: var(--shadow);
+  }
+
+  .chart-card h3 {
+    margin: 0 0 4px;
+    font-size: 1.1rem;
+  }
+
+  .chart-card .period-label {
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+    margin-bottom: 16px;
+    font-family: -apple-system, system-ui, sans-serif;
+  }
+
+  .chart-card.old { border-top: 4px solid var(--accent-old); }
+  .chart-card.new { border-top: 4px solid var(--accent-new); }
+
+  .chart-wrapper {
+    position: relative;
+    height: 320px;
+  }
+
+  .overlay-chart-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 24px;
+    box-shadow: var(--shadow);
+    margin-bottom: 32px;
+  }
+
+  .overlay-chart-card h3 {
+    margin: 0 0 4px;
+    font-size: 1.2rem;
+  }
+
+  .overlay-chart-card .subtitle {
+    font-size: 0.9rem;
+    color: var(--ink-soft);
+    margin-bottom: 20px;
+    font-family: -apple-system, system-ui, sans-serif;
+    font-style: normal;
+    text-align: left;
+  }
+
+  .overlay-wrapper {
+    position: relative;
+    height: 420px;
+  }
+
+  footer {
+    text-align: center;
+    padding: 32px 24px;
+    color: var(--ink-soft);
+    font-size: 0.85rem;
+    font-family: -apple-system, system-ui, sans-serif;
+    border-top: 1px solid var(--line);
+  }
+
+  footer a { color: var(--accent-old); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  .hidden { display: none !important; }
+
+  .loader {
+    border: 3px solid var(--line);
+    border-top: 3px solid var(--accent-old);
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 16px;
+  }
+
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  .quote {
+    font-style: italic;
+    color: var(--ink-soft);
+    text-align: center;
+    margin: 48px auto 0;
+    max-width: 600px;
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Klimavergleich</h1>
+  <p class="subtitle">Wie hat sich das Wetter an einem Ort über die Jahrzehnte verändert? Gib einen Ort ein und sieh den Unterschied.</p>
+</header>
+
+<main>
+
+  <div class="controls">
+    <div class="control-grid">
+      <div class="field suggestions">
+        <label for="location">Ort</label>
+        <input type="text" id="location" placeholder="z.B. Berlin, Wien, Zürich..." autocomplete="off">
+        <div id="suggestions" class="suggestion-list hidden"></div>
+      </div>
+
+      <div class="field">
+        <label for="period-old">Früher</label>
+        <select id="period-old">
+          <option value="1950">1950–1959</option>
+          <option value="1960">1960–1969</option>
+          <option value="1970">1970–1979</option>
+          <option value="1975" selected>1975–1984</option>
+          <option value="1980">1980–1989</option>
+          <option value="1985">1985–1994</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="period-new">Heute</label>
+        <select id="period-new">
+          <option value="2000">2000–2009</option>
+          <option value="2005">2005–2014</option>
+          <option value="2010">2010–2019</option>
+          <option value="2015" selected>2015–2024</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="variable">Größe</label>
+        <select id="variable">
+          <option value="temperature_2m_mean" selected>Temperatur (Mittel)</option>
+          <option value="temperature_2m_max">Temperatur (Höchst)</option>
+          <option value="temperature_2m_min">Temperatur (Tiefst)</option>
+          <option value="precipitation_sum">Niederschlag</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div id="status" class="status hidden"></div>
+
+  <div id="results" class="hidden">
+    <div class="location-info">
+      <h2 id="location-name">—</h2>
+      <div class="coords" id="location-coords">—</div>
+    </div>
+
+    <div class="summary-cards" id="summary-cards"></div>
+
+    <div class="charts">
+      <div class="chart-card old">
+        <h3 id="title-old">Früher</h3>
+        <div class="period-label" id="subtitle-old">—</div>
+        <div class="chart-wrapper"><canvas id="chart-old"></canvas></div>
+      </div>
+      <div class="chart-card new">
+        <h3 id="title-new">Heute</h3>
+        <div class="period-label" id="subtitle-new">—</div>
+        <div class="chart-wrapper"><canvas id="chart-new"></canvas></div>
+      </div>
+    </div>
+
+    <div class="overlay-chart-card">
+      <h3>Direkter Vergleich</h3>
+      <div class="subtitle">Beide Zeiträume übereinandergelegt — der Unterschied auf einen Blick.</div>
+      <div class="overlay-wrapper"><canvas id="chart-overlay"></canvas></div>
+    </div>
+
+    <p class="quote">
+      „Der Mensch erfährt sich nur, soweit er die Welt erfährt." — Goethe<br>
+      <span style="font-size:0.85em; opacity:0.7;">Datenquelle: Open-Meteo / ECMWF ERA5-Reanalyse</span>
+    </p>
+  </div>
+
+</main>
+
+<footer>
+  Daten: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo Historical Weather API</a> (ERA5-Reanalyse).
+  Klimanormale werden aus Tagesdaten über jeweils 10 Jahre gemittelt und als monatliche Werte dargestellt.
+</footer>
+
+<script>
+// ============================================================
+//  Klimavergleich — Hauptlogik
+// ============================================================
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+
+const VARIABLE_META = {
+  temperature_2m_mean: { label: 'Mitteltemperatur', unit: '°C', agg: 'mean', decimals: 1 },
+  temperature_2m_max:  { label: 'Höchsttemperatur', unit: '°C', agg: 'mean', decimals: 1 },
+  temperature_2m_min:  { label: 'Tiefsttemperatur', unit: '°C', agg: 'mean', decimals: 1 },
+  precipitation_sum:   { label: 'Niederschlag',     unit: 'mm', agg: 'sum-monthly-mean', decimals: 0 }
+};
+
+let currentLocation = null;
+let charts = { old: null, new: null, overlay: null };
+let suggestionTimer = null;
+
+const $ = (id) => document.getElementById(id);
+
+// ----------------------------------------------
+//  Geocoding (Ortssuche)
+// ----------------------------------------------
+async function searchLocations(query) {
+  if (!query || query.length < 2) return [];
+  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=6&language=de&format=json`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    return data.results || [];
+  } catch (e) {
+    console.error('Geocoding error', e);
+    return [];
+  }
+}
+
+function renderSuggestions(results) {
+  const box = $('suggestions');
+  if (!results.length) { box.classList.add('hidden'); return; }
+  box.innerHTML = results.map((r, i) => {
+    const region = [r.admin1, r.country].filter(Boolean).join(', ');
+    return `<div class="suggestion-item" data-idx="${i}">
+              <strong>${r.name}</strong>
+              <span style="color:var(--ink-soft); font-size:0.85em;"> — ${region}</span>
+            </div>`;
+  }).join('');
+  box.classList.remove('hidden');
+
+  box.querySelectorAll('.suggestion-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const idx = parseInt(el.dataset.idx, 10);
+      const loc = results[idx];
+      $('location').value = `${loc.name}${loc.admin1 ? ', ' + loc.admin1 : ''}`;
+      box.classList.add('hidden');
+      currentLocation = loc;
+      runComparison();
+    });
+  });
+}
+
+$('location').addEventListener('input', (e) => {
+  clearTimeout(suggestionTimer);
+  suggestionTimer = setTimeout(async () => {
+    const results = await searchLocations(e.target.value);
+    renderSuggestions(results);
+  }, 250);
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.suggestions')) {
+    $('suggestions').classList.add('hidden');
+  }
+});
+
+// ----------------------------------------------
+//  Historical Weather API
+// ----------------------------------------------
+async function fetchHistorical(lat, lon, startYear, endYear, variable) {
+  const start = `${startYear}-01-01`;
+  const end = `${endYear}-12-31`;
+  const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${start}&end_date=${end}&daily=${variable}&timezone=auto`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`API-Fehler: ${res.status}`);
+  return res.json();
+}
+
+// ----------------------------------------------
+//  Aggregation: Tagesdaten -> Monatsmittel
+// ----------------------------------------------
+function aggregateMonthly(dates, values, aggType) {
+  // Buckets: monthly arrays of values (über alle Jahre hinweg)
+  const monthBuckets = Array.from({ length: 12 }, () => []);
+  // Für sum-monthly-mean: sammeln pro Jahr+Monat, dann übers Jahr mitteln
+  const yearMonthSum = {};
+
+  for (let i = 0; i < dates.length; i++) {
+    const v = values[i];
+    if (v === null || v === undefined || Number.isNaN(v)) continue;
+    const d = new Date(dates[i]);
+    const m = d.getMonth();
+    const y = d.getFullYear();
+    if (aggType === 'sum-monthly-mean') {
+      const key = `${y}-${m}`;
+      yearMonthSum[key] = (yearMonthSum[key] || 0) + v;
+    } else {
+      monthBuckets[m].push(v);
+    }
+  }
+
+  if (aggType === 'sum-monthly-mean') {
+    // Pro Monat: Mittel aller Jahressummen
+    const perMonth = Array.from({ length: 12 }, () => []);
+    for (const [key, sum] of Object.entries(yearMonthSum)) {
+      const [, m] = key.split('-').map(Number);
+      perMonth[m].push(sum);
+    }
+    return perMonth.map(arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+  } else {
+    return monthBuckets.map(arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+  }
+}
+
+function computeAnnualStat(values, aggType) {
+  // Jahresmittel/Jahressumme aus den monatlichen Werten
+  const valid = values.filter(v => v !== null);
+  if (!valid.length) return null;
+  if (aggType === 'sum-monthly-mean') {
+    return valid.reduce((a, b) => a + b, 0); // Summe der monatlichen Mittel = Jahressumme
+  }
+  return valid.reduce((a, b) => a + b, 0) / valid.length;
+}
+
+// Zusatz-Statistiken aus den Rohdaten
+function countDays(values, predicate) {
+  return values.filter(predicate).length;
+}
+
+async function fetchExtras(lat, lon, startYear, endYear) {
+  const start = `${startYear}-01-01`;
+  const end = `${endYear}-12-31`;
+  const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&start_date=${start}&end_date=${end}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`API-Fehler: ${res.status}`);
+  const data = await res.json();
+  const years = endYear - startYear + 1;
+  const tmax = data.daily.temperature_2m_max;
+  const tmin = data.daily.temperature_2m_min;
+  const precip = data.daily.precipitation_sum;
+  return {
+    hotDaysPerYear: countDays(tmax, v => v !== null && v >= 30) / years,
+    summerDaysPerYear: countDays(tmax, v => v !== null && v >= 25) / years,
+    frostDaysPerYear: countDays(tmin, v => v !== null && v < 0) / years,
+    annualPrecip: precip.filter(v => v !== null).reduce((a, b) => a + b, 0) / years,
+    annualMeanTmax: tmax.filter(v => v !== null).reduce((a, b) => a + b, 0) / tmax.filter(v => v !== null).length
+  };
+}
+
+// ----------------------------------------------
+//  Charts
+// ----------------------------------------------
+function destroyChart(key) {
+  if (charts[key]) { charts[key].destroy(); charts[key] = null; }
+}
+
+function buildSingleChart(canvasId, label, monthlyValues, color, colorSoft, meta, isPrecip) {
+  destroyChart(canvasId.replace('chart-', ''));
+  const ctx = $(canvasId).getContext('2d');
+  const dataset = isPrecip ? {
+    type: 'bar',
+    label,
+    data: monthlyValues,
+    backgroundColor: colorSoft,
+    borderColor: color,
+    borderWidth: 1
+  } : {
+    type: 'line',
+    label,
+    data: monthlyValues,
+    borderColor: color,
+    backgroundColor: colorSoft,
+    fill: true,
+    tension: 0.4,
+    borderWidth: 2.5,
+    pointRadius: 3,
+    pointBackgroundColor: color
+  };
+
+  const chart = new Chart(ctx, {
+    type: isPrecip ? 'bar' : 'line',
+    data: { labels: MONTH_NAMES, datasets: [dataset] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.parsed.y?.toFixed(meta.decimals)} ${meta.unit}`
+          }
+        }
+      },
+      scales: {
+        y: {
+          title: { display: true, text: `${meta.label} (${meta.unit})` },
+          grid: { color: '#eeeae0' }
+        },
+        x: { grid: { display: false } }
+      }
+    }
+  });
+  charts[canvasId.replace('chart-', '')] = chart;
+}
+
+function buildOverlayChart(monthlyOld, monthlyNew, labelOld, labelNew, meta, isPrecip) {
+  destroyChart('overlay');
+  const ctx = $('chart-overlay').getContext('2d');
+
+  const colorOld = '#4a6fa5';
+  const colorNew = '#c84b3c';
+
+  const datasets = isPrecip ? [
+    {
+      type: 'bar',
+      label: labelOld,
+      data: monthlyOld,
+      backgroundColor: 'rgba(74, 111, 165, 0.55)',
+      borderColor: colorOld,
+      borderWidth: 1
+    },
+    {
+      type: 'bar',
+      label: labelNew,
+      data: monthlyNew,
+      backgroundColor: 'rgba(200, 75, 60, 0.55)',
+      borderColor: colorNew,
+      borderWidth: 1
+    }
+  ] : [
+    {
+      type: 'line',
+      label: labelOld,
+      data: monthlyOld,
+      borderColor: colorOld,
+      backgroundColor: 'rgba(74, 111, 165, 0.12)',
+      fill: false,
+      tension: 0.4,
+      borderWidth: 3,
+      pointRadius: 3,
+      pointBackgroundColor: colorOld
+    },
+    {
+      type: 'line',
+      label: labelNew,
+      data: monthlyNew,
+      borderColor: colorNew,
+      backgroundColor: 'rgba(200, 75, 60, 0.12)',
+      fill: '-1',
+      tension: 0.4,
+      borderWidth: 3,
+      pointRadius: 3,
+      pointBackgroundColor: colorNew
+    }
+  ];
+
+  charts.overlay = new Chart(ctx, {
+    type: isPrecip ? 'bar' : 'line',
+    data: { labels: MONTH_NAMES, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'top', labels: { font: { size: 13 }, usePointStyle: true } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y?.toFixed(meta.decimals)} ${meta.unit}`
+          }
+        }
+      },
+      scales: {
+        y: {
+          title: { display: true, text: `${meta.label} (${meta.unit})` },
+          grid: { color: '#eeeae0' }
+        },
+        x: { grid: { display: false } }
+      }
+    }
+  });
+}
+
+// ----------------------------------------------
+//  Summary-Karten
+// ----------------------------------------------
+function renderSummary(annualOld, annualNew, extrasOld, extrasNew, meta, isPrecip, periodLabelOld, periodLabelNew) {
+  const cards = [];
+  const delta = annualNew - annualOld;
+  const deltaSign = delta >= 0 ? '+' : '';
+  const deltaCls = isPrecip ? (delta >= 0 ? 'cooler' : 'warmer') : (delta >= 0 ? 'warmer' : 'cooler');
+
+  cards.push({
+    label: `Jahres${isPrecip ? 'summe' : 'mittel'} — ${meta.label}`,
+    value: `${deltaSign}${delta.toFixed(meta.decimals)} ${meta.unit}`,
+    detail: `${annualOld.toFixed(meta.decimals)} → ${annualNew.toFixed(meta.decimals)} ${meta.unit}`,
+    cls: deltaCls
+  });
+
+  if (extrasOld && extrasNew) {
+    const dHot = extrasNew.hotDaysPerYear - extrasOld.hotDaysPerYear;
+    cards.push({
+      label: 'Hitzetage / Jahr (≥30 °C)',
+      value: `${dHot >= 0 ? '+' : ''}${dHot.toFixed(1)} Tage`,
+      detail: `${extrasOld.hotDaysPerYear.toFixed(1)} → ${extrasNew.hotDaysPerYear.toFixed(1)}`,
+      cls: dHot >= 0 ? 'warmer' : 'cooler'
+    });
+
+    const dFrost = extrasNew.frostDaysPerYear - extrasOld.frostDaysPerYear;
+    cards.push({
+      label: 'Frosttage / Jahr (Tmin < 0 °C)',
+      value: `${dFrost >= 0 ? '+' : ''}${dFrost.toFixed(1)} Tage`,
+      detail: `${extrasOld.frostDaysPerYear.toFixed(1)} → ${extrasNew.frostDaysPerYear.toFixed(1)}`,
+      cls: dFrost <= 0 ? 'warmer' : 'cooler'
+    });
+
+    const dPrecip = extrasNew.annualPrecip - extrasOld.annualPrecip;
+    cards.push({
+      label: 'Niederschlag / Jahr',
+      value: `${dPrecip >= 0 ? '+' : ''}${dPrecip.toFixed(0)} mm`,
+      detail: `${extrasOld.annualPrecip.toFixed(0)} → ${extrasNew.annualPrecip.toFixed(0)} mm`,
+      cls: 'neutral'
+    });
+  }
+
+  $('summary-cards').innerHTML = cards.map(c => `
+    <div class="summary-card">
+      <div class="label">${c.label}</div>
+      <div class="value ${c.cls}">${c.value}</div>
+      <div class="detail">${c.detail}</div>
+    </div>
+  `).join('');
+}
+
+// ----------------------------------------------
+//  Hauptfunktion
+// ----------------------------------------------
+async function runComparison() {
+  if (!currentLocation) return;
+
+  const startOld = parseInt($('period-old').value, 10);
+  const startNew = parseInt($('period-new').value, 10);
+  const endOld = startOld + 9;
+  const endNew = startNew + 9;
+  const variable = $('variable').value;
+  const meta = VARIABLE_META[variable];
+  const isPrecip = variable === 'precipitation_sum';
+
+  const lat = currentLocation.latitude;
+  const lon = currentLocation.longitude;
+
+  $('results').classList.add('hidden');
+  $('status').classList.remove('hidden');
+  $('status').innerHTML = `<div class="loader"></div>Lade Klimadaten für <strong>${currentLocation.name}</strong>…`;
+
+  try {
+    const [oldData, newData, extrasOld, extrasNew] = await Promise.all([
+      fetchHistorical(lat, lon, startOld, endOld, variable),
+      fetchHistorical(lat, lon, startNew, endNew, variable),
+      fetchExtras(lat, lon, startOld, endOld),
+      fetchExtras(lat, lon, startNew, endNew)
+    ]);
+
+    const monthlyOld = aggregateMonthly(oldData.daily.time, oldData.daily[variable], meta.agg);
+    const monthlyNew = aggregateMonthly(newData.daily.time, newData.daily[variable], meta.agg);
+    const annualOld = computeAnnualStat(monthlyOld, meta.agg);
+    const annualNew = computeAnnualStat(monthlyNew, meta.agg);
+
+    // Header
+    const region = [currentLocation.admin1, currentLocation.country].filter(Boolean).join(', ');
+    $('location-name').textContent = currentLocation.name + (region ? ` — ${region}` : '');
+    $('location-coords').textContent = `${lat.toFixed(3)}° N, ${lon.toFixed(3)}° E · ${currentLocation.elevation ? Math.round(currentLocation.elevation) + ' m ü.M.' : ''}`;
+
+    const labelOld = `${startOld}–${endOld}`;
+    const labelNew = `${startNew}–${endNew}`;
+
+    $('title-old').textContent = `Früher (${labelOld})`;
+    $('title-new').textContent = `Heute (${labelNew})`;
+    $('subtitle-old').textContent = `${meta.label} pro Monat — Mittel über 10 Jahre`;
+    $('subtitle-new').textContent = `${meta.label} pro Monat — Mittel über 10 Jahre`;
+
+    buildSingleChart('chart-old', labelOld, monthlyOld, '#4a6fa5', 'rgba(74, 111, 165, 0.18)', meta, isPrecip);
+    buildSingleChart('chart-new', labelNew, monthlyNew, '#c84b3c', 'rgba(200, 75, 60, 0.18)', meta, isPrecip);
+    buildOverlayChart(monthlyOld, monthlyNew, labelOld, labelNew, meta, isPrecip);
+
+    renderSummary(annualOld, annualNew, extrasOld, extrasNew, meta, isPrecip, labelOld, labelNew);
+
+    $('status').classList.add('hidden');
+    $('results').classList.remove('hidden');
+
+  } catch (err) {
+    console.error(err);
+    $('status').innerHTML = `<p style="color: var(--accent-new);">Fehler beim Laden der Daten: ${err.message}.<br>Bitte erneut versuchen oder anderen Ort/Zeitraum wählen.</p>`;
+  }
+}
+
+// ----------------------------------------------
+//  Event-Listener
+// ----------------------------------------------
+['period-old', 'period-new', 'variable'].forEach(id => {
+  $(id).addEventListener('change', () => { if (currentLocation) runComparison(); });
+});
+
+// Default-Demo: Berlin laden
+window.addEventListener('DOMContentLoaded', async () => {
+  $('location').value = 'Berlin';
+  const results = await searchLocations('Berlin');
+  if (results.length) {
+    currentLocation = results[0];
+    runComparison();
+  }
+});
+</script>
+
+</body>
+</html>
